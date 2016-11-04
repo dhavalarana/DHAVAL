@@ -1,0 +1,447 @@
+-------------------------------------------------------------------------------------
+1. in DPEntities -> Entities -> replace the class file BatchRecord.cs with this
+-------------------------------------------------------------------------------------
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+
+namespace Sabra.DPEntities
+{
+    [Serializable]
+    public class BatchRecord : EntitiesBase
+    {
+        public int BatchId { get; set; }
+        public string RecipeCode { get; set; }
+        public string Recipe { get; set; }
+        public string BatchLetter { get; set; }
+        public string UBICode { get; set; }
+        public bool HasAllergen { get; set; }
+
+        public string HasAllergenText
+        {
+            get
+            {
+                return HasAllergen ? "** Has Allergens **" : "";
+            }
+        }
+
+        public int Sequence { get; set; }
+        public int TotalBatches { get; set; }
+        public int CurrentBatch { get; set; }
+        public int TotalCurrentRecipeBatches { get; set; }
+        public decimal BatchWeight { get; set; }
+        public decimal BatchPercent { get; set; }
+        public string FCJ { get; set; }
+        public decimal FreshTomatoesUsed { get; set; }
+        public decimal DicedTomatoUsed { get; set; }
+        public decimal ReplacedDicedLbs { get; set; }
+        public decimal Replaced7APercent { get; set; }
+        public string Note { get; set; }
+        public bool PrintLotCode { get; set; }
+        public string LotCode { get; set; } 
+    }
+
+    [Serializable]
+    public class BatchQualityRecord : EntitiesBase
+    {
+        public int BatchId { get; set; }
+        public string SpecName { get; set; }
+        public string SpecTarget { get; set; }
+    }
+
+    [Serializable]
+    public class BatchPackingRecord : EntitiesBase
+    {
+        public int BatchId { get; set; }
+        public decimal? MAS90Number { get; set; }
+        public string MAS90No
+        {
+            get
+            {
+                string num = null;
+
+                if (MAS90Number.HasValue)
+                    num = MAS90Number.ToString();
+
+                return num;
+            }
+        }
+
+        public int? Pack { get; set; }
+        public decimal? OzPerUnit { get; set; }
+        public decimal? NetWeight { get; set; }
+        public string Brand { get; set; }
+        public string LidColor { get; set; }
+        public string UPC { get; set; }
+        public string Description { get; set; }
+        public string NetWeigthMinGrams { get; set; }
+        public string PackingLine { get; set; }
+        public string CaseLabelColor { get; set; }
+        public string SellOrUseHeader { get; set; }
+        public string SellOrUseDate { get; set; }
+        public string ProductionCodeHeader { get; set; }
+        public string ProductionCode { get; set; }
+        public bool ShowCCP { get; set; }
+        public byte[] PackingBatchBarCode { get; set; }
+    }
+
+    public class BatchRecordItems : EntitiesBase
+    {
+        public string RecipeCode { get; set; }
+        public decimal? ItemNumber { get; set; }
+        public string PackingLine { get; set; }
+    }
+}
+
+-------------------------------------------------------------------------------------
+2. in DBPBLL->BatchrecordBLL, replace the existing GetBatchRecordList method with this
+-------------------------------------------------------------------------------------
+
+public RetrieveBatchRecordResponse GetBatchRecordList(RetrieveBatchRecordRequest request)
+        {
+            RetrieveBatchRecordResponse response = new RetrieveBatchRecordResponse();
+            response.BatchRecordList = new List<BatchRecord>();
+            response.QualityBatchRecordList = new List<BatchQualityRecord>();
+            response.PackingBatchRecordList = new List<BatchPackingRecord>();
+
+            Step1InputValues Step1InputValues = request.Step1InputValues;
+            Step3InputValues Step3InputValues = request.Step3InputValue;
+            List<Step1Products> Step1ProductList = request.Step1ProductList;
+            List<Step2Products> Step2ProductList = request.Step2ProductList;
+            List<Products> ProductList = request.ProductList;
+            List<Recipes> RecipeLookupList = request.RecipeLookupList;
+            List<MakingRoomSummaryCalc> makingSummaryCalcList = request.MakingSummaryCalcList;
+            List<CalculatedMakingCalcs> calcMakingCalcList = request.CalcMakingCalcList;
+
+            decimal minBatchRatio = request.Step1InputValues.MinBatchRatio.HasValue ? request.Step1InputValues.MinBatchRatio.Value / 100 : 0;
+            decimal batches = 0, recipes = 0;
+            if (calcMakingCalcList != null)
+            {
+                // 'this cell has total recipes for today
+                recipes = calcMakingCalcList.Count();
+                //'this cell has total batches
+                batches = (from c in calcMakingCalcList select (c.Batches.HasValue ? (c.Batches.Value - (int)c.Batches.Value >= minBatchRatio ? Math.Ceiling(c.Batches.Value) : (int)c.Batches.Value) : 0)).Sum();
+            }
+
+            //'used for Sequence line, 2nd part
+            int currBatch = 0;
+            // 'used for FG grid
+            int currRecipe = 1;
+
+            //'Is set to true once we print one Litheouse sheet, then it stops
+            bool lhDone = false;
+
+            if (makingSummaryCalcList != null && makingSummaryCalcList.Count > 0)
+            {
+                for (int i = 0; i < batches; i++)
+                {
+                    if (lhDone && makingSummaryCalcList[i].RecipeCode.Equals("LIT"))
+                    {
+                        //Do Nothing
+                    }
+                    else
+                    {
+                        Products currProduct = (from p in ProductList where p.RecipeCode.Equals(makingSummaryCalcList[i].RecipeCode) select p).FirstOrDefault();
+                        BatchRecord batchRecord = new BatchRecord();
+                        batchRecord.BatchId = i + 1;
+                        batchRecord.RecipeCode = makingSummaryCalcList[i].RecipeCode;
+                        batchRecord.Recipe = (from s in Step2ProductList where s.Code == batchRecord.RecipeCode select s.Recipe).FirstOrDefault();
+                        batchRecord.BatchLetter = makingSummaryCalcList[i].BatchLetter;
+                        batchRecord.UBICode = makingSummaryCalcList[i].UBE;
+                        if (makingSummaryCalcList[i].RecipeCode.Equals("LIT"))
+                            lhDone = true;
+                        currBatch++;
+                        if (currBatch > 1)
+                        {
+                            if (!makingSummaryCalcList[i].RecipeCode.Equals(makingSummaryCalcList[i - 1].RecipeCode))
+                            {
+                                currBatch = 1;
+                                currRecipe++;
+                            }
+                        }
+
+                        batchRecord.Sequence = i + 1;
+                        batchRecord.TotalBatches = (int)batches;
+                        batchRecord.CurrentBatch = currBatch;
+                        batchRecord.TotalCurrentRecipeBatches = (from m in makingSummaryCalcList where m.RecipeCode.Equals(batchRecord.RecipeCode) select m.RecipeCode).Count();
+
+                        //Now Calculate 'batch weight and %
+                        if (currProduct != null)
+                        {
+                            batchRecord.BatchWeight = (makingSummaryCalcList[i].BatchFraction.HasValue ? makingSummaryCalcList[i].BatchFraction.Value : 0) * (makingSummaryCalcList[i].BatchFraction.HasValue ? currProduct.TotalBatchSize.Value : 0);
+                            batchRecord.BatchPercent = makingSummaryCalcList[i].BatchFraction.HasValue ? makingSummaryCalcList[i].BatchFraction.Value : 0;
+                            batchRecord.FCJ = currProduct.FreshOrCooked;
+                            if (batchRecord.FCJ.Equals("F"))
+                            {
+                                batchRecord.FreshTomatoesUsed = makingSummaryCalcList[i].Needed7ALbs.HasValue ? makingSummaryCalcList[i].Needed7ALbs.Value : 0;
+                                if (batchRecord.RecipeCode.Equals("GUA"))
+                                {
+                                    batchRecord.FreshTomatoesUsed = batchRecord.BatchWeight * 2;
+                                }
+
+                                decimal lbsTomake = batchRecord.BatchWeight * batchRecord.BatchPercent;
+                                decimal anyDicedRepl = makingSummaryCalcList[i].AnyDicedReplacePercent.HasValue ? makingSummaryCalcList[i].AnyDicedReplacePercent.Value : 0;
+                                decimal percentFreshTarget = currProduct.PercentFreshTomatoesInRecipe.Value;
+
+                                batchRecord.Replaced7APercent = lbsTomake * anyDicedRepl * percentFreshTarget;
+                                batchRecord.DicedTomatoUsed = makingSummaryCalcList[i].NeededDicedLbs.HasValue ? makingSummaryCalcList[i].NeededDicedLbs.Value : 0;
+                                batchRecord.Note = Step3InputValues.ItemNoteToPackingRoom + Step3InputValues.NoItemNoteToCookingRoom;
+                            }
+                            else
+                            {
+                                batchRecord.FreshTomatoesUsed = 0;
+                                batchRecord.Replaced7APercent = 0;
+                                batchRecord.DicedTomatoUsed = 0;
+                            }
+
+                            bool? hasAllergens = (from r in RecipeLookupList where r.RecipeCode == batchRecord.RecipeCode select r.HasAllergens).FirstOrDefault();
+                            batchRecord.HasAllergen = hasAllergens.HasValue ? hasAllergens.Value : false;
+
+                            //For LotCode : 17 Dec 2012
+                            Recipes currLookupRecipe = (from r in RecipeLookupList where r.RecipeCode == batchRecord.RecipeCode select r).FirstOrDefault();
+                            batchRecord.PrintLotCode = currLookupRecipe != null ? currLookupRecipe.PrintLotCode.HasValue ? currLookupRecipe.PrintLotCode.Value : false : false;
+                            string length = batchRecord.UBICode.Length <= 13 ? "1" : "2";
+                            batchRecord.LotCode = currLookupRecipe != null ? string.Concat(batchRecord.UBICode.Substring(1, 4), currLookupRecipe.RecipeNumber.ToString(), ((int)batchRecord.BatchLetter[0]).ToString(), length) : string.Empty;
+
+                            response.BatchRecordList.Add(batchRecord);
+
+                            //'fill Quality Record grid in range H10:J19
+
+                            BatchQualityRecord qualityRecord = new BatchQualityRecord();
+                            for (int j = 1; j <= 10; j++)
+                            {
+                                qualityRecord = new BatchQualityRecord();
+                                qualityRecord.BatchId = batchRecord.BatchId;
+                                if (j == 1)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec1Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec1Target;
+                                }
+                                else if (j == 2)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec2Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec2Target;
+                                }
+                                else if (j == 3)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec3Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec3Target;
+                                }
+                                else if (j == 4)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec4Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec4Target;
+                                }
+                                else if (j == 5)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec5Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec5Target;
+                                }
+                                else if (j == 6)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec6Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec6Target;
+                                }
+                                else if (j == 7)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec7Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec7Target;
+                                }
+                                else if (j == 8)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec8Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec8Target;
+                                }
+                                else if (j == 9)
+                                {
+                                    qualityRecord.SpecName = currProduct.Spec9Name;
+                                    qualityRecord.SpecTarget = currProduct.Spec9Target;
+                                }
+                                else if (j == 10)
+                                {
+                                    qualityRecord.SpecName = currProduct.SpecAName;
+                                    qualityRecord.SpecTarget = currProduct.SpecATarget;
+                                }
+                                if (!string.IsNullOrEmpty(qualityRecord.SpecName))
+                                    response.QualityBatchRecordList.Add(qualityRecord);
+                            }
+
+                            //'fill FG Packing Record grid
+                            List<BatchRecordItems> ItemsList = GetBatchRecordItems(batchRecord.RecipeCode, Step1ProductList, Step2ProductList);
+                            ItemsList = (from it in ItemsList select new BatchRecordItems { RecipeCode = it.RecipeCode, ItemNumber = it.ItemNumber, PackingLine = it.PackingLine }).Distinct().ToList();
+
+                            //int itemsCounter = 0;
+                            foreach (BatchRecordItems item in ItemsList)
+                            {
+                                if (item.RecipeCode.Equals(batchRecord.RecipeCode))
+                                {
+                                    BatchPackingRecord packingRecord = new BatchPackingRecord();
+                                    currProduct = (from p in ProductList where p.BillNumber == item.ItemNumber select p).FirstOrDefault();
+                                    packingRecord.BatchId = batchRecord.BatchId;
+                                    packingRecord.MAS90Number = item.ItemNumber;
+                                    packingRecord.ShowCCP = Step1InputValues.ShowCCP;
+                                    if (currProduct != null)
+                                    {
+                                        packingRecord.Pack = currProduct.Units;
+                                        packingRecord.NetWeight = currProduct.NetWeightLbs;
+                                        packingRecord.OzPerUnit = currProduct.OzPerUnit;
+                                        packingRecord.Brand = currProduct.Name;
+                                        packingRecord.LidColor = currProduct.LidColor;
+                                        packingRecord.UPC = currProduct.UPC;
+                                        packingRecord.Description = currProduct.ShortDescription;
+                                        packingRecord.NetWeigthMinGrams = currProduct.GramTarget;
+
+                                        //packingRecord.PackingLine = currProduct.Line;
+                                        packingRecord.PackingLine = item.PackingLine;
+
+                                        packingRecord.CaseLabelColor = currProduct.CaseLabelColor;
+
+                                        //Sell/use Date Prefix
+
+                                        //sell/use date added by kbs 8/19/2013
+                                        if (packingRecord.MAS90Number == 301294)
+                                        {
+                                            packingRecord.SellOrUseHeader = string.Concat(currProduct.SellOrUsePrefix, " Date (dd/MM/YYYY");
+                                            packingRecord.SellOrUseDate = (Step1InputValues.PackingDate.AddDays(currProduct.CodeLife.Value)).ToString("dd/MM/yyyy");
+                                        }
+                                        else
+                                        {
+
+
+                                            if (packingRecord.Brand != "Safeway")
+                                                packingRecord.SellOrUseHeader = string.Concat(currProduct.SellOrUsePrefix, " Date");
+                                            else
+                                                packingRecord.SellOrUseHeader = string.Concat(currProduct.SellOrUsePrefix, " (Date) then Letter then S3849");
+
+
+                                            //Sell/Use Date Value
+                                            //if (packingRecord.MAS90No != "AF")
+                                            if (currProduct.BrandCode == "AF")
+                                                packingRecord.SellOrUseDate = (Step1InputValues.PackingDate.AddDays(currProduct.CodeLife.Value)).ToString("dd/MMM/yyyy") + " " + Step1InputValues.MakingShift.ToString() + " " + batchRecord.RecipeCode;
+                                            else
+                                            {   //begining
+                                                if (packingRecord.Brand == "Safeway")
+                                                    //date is case sensitive and needs to be in format of MMM/dd/yy or else the month is displayed as integers
+                                                    packingRecord.SellOrUseDate = (Step1InputValues.PackingDate.AddDays(currProduct.CodeLife.Value)).ToString("MMM/dd/yy") + " " + Step1InputValues.MakingShift.ToString() + " " + batchRecord.RecipeCode + " S3849";
+                                                else
+                                                {
+                                                    if (!string.IsNullOrEmpty(packingRecord.PackingLine) && batchRecord.RecipeCode == "GUA")
+                                                        packingRecord.SellOrUseDate = "packing from Calavo";
+                                                    else
+                                                    {
+                                                        if (packingRecord.MAS90Number.HasValue && batchRecord.RecipeCode != "CVF" && batchRecord.RecipeCode.Substring(batchRecord.RecipeCode.Length - 2, batchRecord.RecipeCode.Length - 1) != "JC" && batchRecord.RecipeCode.Substring(batchRecord.RecipeCode.Length - 2, batchRecord.RecipeCode.Length - 1) != "SV")
+                                                        {
+                                                            packingRecord.SellOrUseDate = (Step1InputValues.PackingDate.AddDays(currProduct.CodeLife.Value)).ToString("MM/dd/yyyy");
+                                                            if (packingRecord.PackingLine != "COOK" && packingRecord.PackingLine != "JUICE")
+                                                            {
+                                                                packingRecord.SellOrUseDate += " " + batchRecord.BatchLetter;
+                                                            }
+
+                                                        }
+                                                        //else if (packingRecord.PackingLine != "COOK" && packingRecord.PackingLine != "JUICE")
+                                                        //{
+                                                        //    packingRecord.SellOrUseDate = batchRecord.RecipeCode;
+                                                        //}
+                                                    }
+                                                }
+                                            } //end of else
+                                        }
+                                        if (packingRecord.PackingLine == "COOK" || batchRecord.RecipeCode == "CVF")
+                                            packingRecord.ProductionCodeHeader = "Inkjet Code";
+                                        else
+                                            packingRecord.ProductionCodeHeader = "Production Code";
+
+                                        if (packingRecord.ProductionCodeHeader != "")
+                                        {
+                                            if (packingRecord.ProductionCodeHeader.Contains("Shift"))
+                                                packingRecord.ProductionCode = "__________";
+                                            else
+                                            {
+                                                if (packingRecord.NetWeight.Value != 16) //packingRecord.ProductionCodeHeader.Contains("Date") &&  commented
+                                                    packingRecord.ProductionCode = string.Concat(batchRecord.UBICode.Substring((batchRecord.UBICode.Length - 6), 4), batchRecord.UBICode.Substring(6, (batchRecord.UBICode.Length - 6)), currProduct.BrandSKU, "KF", batchRecord.RecipeCode);
+
+                                            }
+
+                                        }
+                                    }
+                                    response.PackingBatchRecordList.Add(packingRecord);
+                                }
+                            }
+
+                        }
+                    }
+                }
+            }
+
+            
+            int currentBatchId = 1;
+            int newBatchId = 1;
+
+            List<BatchRecord> finalBatchrecords = new List<BatchRecord>();
+            List<BatchQualityRecord> finalQualityRecords = new List<BatchQualityRecord>();
+            List<BatchPackingRecord> finalBatchPackingrecord = new List<BatchPackingRecord>();
+            List<string> existingRecipieCodes = new List<string>();
+
+            //batches is the batchcount or number of batches
+            if (response.PackingBatchRecordList != null && response.PackingBatchRecordList.Count > 0)
+            {
+                while (currentBatchId <= batches)
+                {
+                    List<BatchPackingRecord> lstBPR = response.PackingBatchRecordList.FindAll(pbr => pbr.BatchId == currentBatchId);
+                    List<BatchQualityRecord> lstBQR = response.QualityBatchRecordList.FindAll(qbr => qbr.BatchId == currentBatchId);
+                    BatchRecord currentBr = response.BatchRecordList.Find(br => br.BatchId == currentBatchId);
+
+                    //int batchCounter = 0;
+                    foreach (BatchPackingRecord bpr in lstBPR)
+                    {
+                        BatchRecord newBr = (BatchRecord)currentBr.Clone();
+                        newBr.BatchId = newBr.Sequence = newBatchId;
+                        newBr.TotalBatches = response.PackingBatchRecordList.Count;
+                        newBatchId++;
+                        finalBatchrecords.Add(newBr);
+
+                        if (!existingRecipieCodes.Contains(newBr.RecipeCode))
+                            existingRecipieCodes.Add(newBr.RecipeCode);
+
+                        foreach (BatchQualityRecord bqr in lstBQR)
+                        {
+                            BatchQualityRecord newBqr = (BatchQualityRecord)bqr.Clone();
+                            newBqr.BatchId = newBr.BatchId;
+                            finalQualityRecords.Add(newBqr);
+                        }
+
+                        BatchPackingRecord newBpr = (BatchPackingRecord)bpr.Clone();
+                        newBpr.BatchId = newBr.BatchId;
+                        finalBatchPackingrecord.Add(newBpr);
+                        //batchCounter++;
+                    }
+
+                    currentBatchId++;
+                }
+
+                int recipieCounter = 1;
+                foreach (string recipieCode in existingRecipieCodes)
+                {
+                    recipieCounter = 1;
+
+                    List<BatchRecord> lstBR = finalBatchrecords.FindAll(pbr => pbr.RecipeCode == recipieCode);
+                    foreach (BatchRecord br in lstBR)
+                    {
+                        br.CurrentBatch = recipieCounter;
+                        br.TotalCurrentRecipeBatches = lstBR.Count();
+                        recipieCounter++;
+                    }
+                }
+
+                response.BatchRecordList = finalBatchrecords;
+                response.QualityBatchRecordList = finalQualityRecords;
+                response.PackingBatchRecordList = finalBatchPackingrecord;                
+                
+            }
+            
+
+            return response;
+        }
+
